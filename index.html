@@ -134,7 +134,7 @@
       <li><strong>Zoom:</strong> Use the mouse wheel (or pinch on touch devices) to zoom in/out.</li>
       <li><strong>Save/Load:</strong> Use the Save Tree and Load Tree buttons to persist or load your work.</li>
       <li><strong>Import Subtree:</strong> Import a subtree by pasting valid JSON data.</li>
-      <li><strong>Organize Tree:</strong> If more than one node is selected, clicking Organize Tree will only layout the selected nodes; otherwise, the entire tree is organized.</li>
+      <li><strong>Organize Tree:</strong> If more than one node is selected, clicking Organize Tree will only layout the selected nodes (using their internal partner/parent relationships); otherwise, the entire tree is organized.</li>
       <li><strong>Undo/Redo:</strong> Use the Undo and Redo buttons to revert changes.</li>
     </ul>
     <button id="closeHelp">Close</button>
@@ -414,8 +414,8 @@
     }
 
     /* ========= Organization ========= */
+    // Organize the entire tree using union–find.
     function organizeTree() {
-      // Organizes the entire tree (using the union-find layout algorithm).
       let uf = {};
       function find(x) {
         if(uf[x] === undefined) { uf[x] = x; }
@@ -495,23 +495,110 @@
       saveHistory();
       draw();
     }
-    // Organize only the selected nodes (when more than one is selected).
+    // Organize only the selected nodes using union–find (only if more than one node is selected).
     function groupOrganizeSelected() {
-      let nodes = Array.from(selectedNodes).map(id => familyTree.nodes[id]);
-      if(nodes.length === 0) return;
-      let minX = Math.min(...nodes.map(n => n.x));
-      let maxX = Math.max(...nodes.map(n => n.x + nodeWidth));
-      let minY = Math.min(...nodes.map(n => n.y));
-      let maxY = Math.max(...nodes.map(n => n.y + nodeHeight));
+      let selectedArray = Array.from(selectedNodes).map(id => familyTree.nodes[id]);
+      if(selectedArray.length === 0) return;
+
+      let uf = {};
+      function find(x) {
+        if(uf[x] === undefined) { uf[x] = x; }
+        if(uf[x] !== x) uf[x] = find(uf[x]);
+        return uf[x];
+      }
+      function union(x, y) {
+        let rx = find(x), ry = find(y);
+        if(rx !== ry) uf[ry] = rx;
+      }
+
+      // Union selected nodes based on partner relationships (only if both nodes are selected)
+      selectedArray.forEach(node => {
+        if(node.partners) {
+          node.partners.forEach(pid => {
+            if(selectedNodes.has(pid)) {
+              union(node.id, pid);
+            }
+          });
+        }
+      });
+
+      // Build union groups for selected nodes
+      let groups = {};
+      selectedArray.forEach(node => {
+        let groupId = find(node.id);
+        if(!groups[groupId]) groups[groupId] = [];
+        groups[groupId].push(node.id);
+      });
+
+      // Build parent's map for selected nodes (only include relationships within selected nodes)
+      let parentsMap = {};
+      selectedArray.forEach(node => {
+        if(node.children) {
+          node.children.forEach(childId => {
+            if(selectedNodes.has(childId)) {
+              if(!parentsMap[childId]) parentsMap[childId] = [];
+              parentsMap[childId].push(node.id);
+            }
+          });
+        }
+      });
+
+      // Compute generation level for each union group using iterative relaxation
+      let groupLevel = {};
+      for (let gid in groups) {
+        groupLevel[gid] = 0;
+      }
+      let changed = true;
+      while(changed) {
+        changed = false;
+        for (let gid in groups) {
+          let newLevel = 0;
+          groups[gid].forEach(nodeId => {
+            if(parentsMap[nodeId]) {
+              parentsMap[nodeId].forEach(pid => {
+                let pGroup = find(pid);
+                newLevel = Math.max(newLevel, groupLevel[pGroup] + 1);
+              });
+            }
+          });
+          if(newLevel > groupLevel[gid]) {
+            groupLevel[gid] = newLevel;
+            changed = true;
+          }
+        }
+      }
+
+      // Assign generation level for each selected node
+      let generation = {};
+      selectedArray.forEach(node => {
+        let gid = find(node.id);
+        generation[node.id] = groupLevel[gid];
+      });
+
+      // Group nodes by generation level
+      let levels = {};
+      selectedArray.forEach(node => {
+        let lvl = generation[node.id];
+        if(!levels[lvl]) levels[lvl] = [];
+        levels[lvl].push(node);
+      });
+
+      // Layout each generation horizontally centered in the bounding box of the selected nodes
+      const verticalSpacing = nodeHeight + 50;
+      const horizontalSpacing = nodeWidth + 50;
+      let minX = Math.min(...selectedArray.map(n => n.x));
+      let maxX = Math.max(...selectedArray.map(n => n.x + nodeWidth));
       let centerX = (minX + maxX) / 2;
-      let centerY = (minY + maxY) / 2;
-      let spacing = nodeWidth + 50;
-      nodes.sort((a, b) => a.id - b.id);
-      let totalWidth = nodes.length * spacing - 50;
-      let startX = centerX - totalWidth / 2;
-      nodes.forEach((node, i) => {
-         node.x = startX + i * spacing;
-         node.y = centerY - nodeHeight/2;
+
+      Object.keys(levels).forEach(lvl => {
+        let group = levels[lvl];
+        group.sort((a, b) => a.id - b.id);
+        let totalWidth = group.length * horizontalSpacing - 50;
+        let startX = centerX - totalWidth / 2;
+        group.forEach((node, i) => {
+          node.x = startX + i * horizontalSpacing;
+          node.y = lvl * verticalSpacing;
+        });
       });
       saveHistory();
       draw();
