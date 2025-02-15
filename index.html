@@ -145,13 +145,6 @@
       }
     });
 
-    // Allow pressing the "a" key to add a node.
-    // document.addEventListener('keydown', e => {
-    //   if(e.key.toLowerCase() === 'a'){
-    //     document.getElementById('addNode').click();
-    //   }
-    // });
-
     // Utility functions to convert between world and screen coordinates.
     function worldToScreen(x, y) {
       return {
@@ -167,8 +160,6 @@
     }
 
     // Data structure for the family tree.
-    // Each node has an id, name, sex, phone, birthday, x/y coordinates,
-    // plus arrays for partner and child node IDs.
     let familyTree = { nodes: {} };
     let nextNodeId = 1;
     const nodeWidth = 100;
@@ -379,7 +370,6 @@
     }
 
     /* ========= Organization ========= */
-    // This algorithm groups nodes by coupling and computes a generation level for each union.
     function organizeTree() {
       // 1. Build union-find for partner relationships.
       let uf = {};
@@ -481,14 +471,16 @@
         let idMap = {};
         for (const oldId in subtree.nodes) {
           let nodeData = subtree.nodes[oldId];
+          // Optionally, adjust position to avoid collision:
+          let [newX, newY] = findNonCollidingPosition(nodeData.x, nodeData.y);
           let newNode = {
             id: nextNodeId++,
             name: nodeData.name,
             sex: nodeData.sex,
             phone: nodeData.phone,
             birthday: nodeData.birthday,
-            x: nodeData.x,
-            y: nodeData.y,
+            x: newX,
+            y: newY,
             partners: [],
             children: []
           };
@@ -681,33 +673,37 @@
     saveTreeButton.addEventListener('click', () => {
       treeDataTextarea.value = JSON.stringify(familyTree, null, 2);
       saveLoadArea.style.display = 'block';
+      // Set the loadTreeDataButton handler to simply hide the area (for saving)
+      loadTreeDataButton.onclick = () => {
+        saveLoadArea.style.display = 'none';
+      };
     });
     loadTreeButton.addEventListener('click', () => {
       treeDataTextarea.value = "";
       saveLoadArea.style.display = 'block';
-    });
-    // For "Load Tree", we replace the current tree.
-    loadTreeDataButton.addEventListener('click', () => {
-      try {
-        let loadedTree = JSON.parse(treeDataTextarea.value);
-        if(loadedTree && loadedTree.nodes){
-          familyTree = loadedTree;
-          nextNodeId = 1;
-          for (const id in familyTree.nodes) {
-            let nid = parseInt(id, 10);
-            if(nid >= nextNodeId) nextNodeId = nid + 1;
+      // Assign the "load full tree" handler.
+      loadTreeDataButton.onclick = () => {
+        try {
+          let loadedTree = JSON.parse(treeDataTextarea.value);
+          if(loadedTree && loadedTree.nodes){
+            familyTree = loadedTree;
+            nextNodeId = 1;
+            for (const id in familyTree.nodes) {
+              let nid = parseInt(id, 10);
+              if(nid >= nextNodeId) nextNodeId = nid + 1;
+            }
+            selectedNode = null;
+            hideSidebar();
+            saveLoadArea.style.display = 'none';
+            saveHistory();
+            draw();
+          } else {
+            alert("Invalid tree data.");
           }
-          selectedNode = null;
-          hideSidebar();
-          saveLoadArea.style.display = 'none';
-          saveHistory();
-          draw();
-        } else {
-          alert("Invalid tree data.");
+        } catch(e) {
+          alert("Error loading tree data: " + e);
         }
-      } catch(e) {
-        alert("Error loading tree data: " + e);
-      }
+      };
     });
     cancelLoadButton.addEventListener('click', () => {
       saveLoadArea.style.display = 'none';
@@ -722,11 +718,11 @@
       showSidebar(newNode);
       draw();
     });
-    // "Import Subtree" opens the same text area with instructions.
+    // "Import Subtree" opens the text area with instructions.
     importSubtreeButton.addEventListener('click', () => {
       treeDataTextarea.value = "Paste subtree JSON here (must include a 'nodes' object):";
       saveLoadArea.style.display = 'block';
-      // After the user clicks "Load Data", we import the subtree and merge it.
+      // Assign the "import subtree" handler.
       loadTreeDataButton.onclick = () => {
         importSubtree(treeDataTextarea.value);
         saveLoadArea.style.display = 'none';
