@@ -961,38 +961,68 @@
         draw();
       }
     });
-    canvas.addEventListener('mouseup', e => {
-      if(e.button === 2) {
+    canvas.addEventListener("mouseup", (e) => {
+      // Right mouse button: stop panning.
+      if (e.button === 2) {
         isPanning = false;
         draw();
-      } else if(e.button === 0) {
-        if(isDraggingGroup) {
+      }
+      // Left mouse button.
+      else if (e.button === 0) {
+        if (isDraggingGroup) {
+          // Calculate how far the mouse moved from the initial click position.
+          const worldPosNow = screenToWorld(e.offsetX, e.offsetY);
+          const dx = worldPosNow.x - dragGroupStart.x;
+          const dy = worldPosNow.y - dragGroupStart.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          const clickThreshold = 5; // Adjust threshold as needed
+    
+          if (distance < clickThreshold) {
+            // Treat as a click instead of a drag.
+            if (selectedNodes.size === 1) {
+              const [id] = Array.from(selectedNodes);
+              showSidebar(familyTree.nodes[id]);
+            }
+          } else {
+            // It's a drag: resolve collisions and save history.
+            selectedNodes.forEach((id) => {
+              resolveCollisionForNode(familyTree.nodes[id]);
+            });
+            saveHistory();
+          }
           isDraggingGroup = false;
-          selectedNodes.forEach(id => {
-            resolveCollisionForNode(familyTree.nodes[id]);
-          });
-          saveHistory();
-        } else if(isSelecting) {
+          draw();
+        }
+        else if (isSelecting) {
           isSelecting = false;
-          if(Math.abs(selectionRect.w) < 0.1 && Math.abs(selectionRect.h) < 0.1) {
+          // If the selection rectangle is negligible, clear the selection.
+          if (
+            Math.abs(selectionRect.w) < 0.1 &&
+            Math.abs(selectionRect.h) < 0.1
+          ) {
             selectedNodes.clear();
             hideSidebar();
           } else {
-            let x1 = Math.min(selectionStart.x, selectionStart.x + selectionRect.w);
-            let y1 = Math.min(selectionStart.y, selectionStart.y + selectionRect.h);
-            let x2 = Math.max(selectionStart.x, selectionStart.x + selectionRect.w);
-            let y2 = Math.max(selectionStart.y, selectionStart.y + selectionRect.h);
+            // Calculate the boundaries of the selection rectangle.
+            const x1 = Math.min(selectionStart.x, selectionStart.x + selectionRect.w);
+            const y1 = Math.min(selectionStart.y, selectionStart.y + selectionRect.h);
+            const x2 = Math.max(selectionStart.x, selectionStart.x + selectionRect.w);
+            const y2 = Math.max(selectionStart.y, selectionStart.y + selectionRect.h);
             selectedNodes.clear();
+    
+            // Add nodes that fall within the selection rectangle.
             for (const id in familyTree.nodes) {
-              let node = familyTree.nodes[id];
-              let centerX = node.x + nodeWidth/2;
-              let centerY = node.y + nodeHeight/2;
-              if(centerX >= x1 && centerX <= x2 && centerY >= y1 && centerY <= y2) {
+              const node = familyTree.nodes[id];
+              const centerX = node.x + nodeWidth / 2;
+              const centerY = node.y + nodeHeight / 2;
+              if (centerX >= x1 && centerX <= x2 && centerY >= y1 && centerY <= y2) {
                 selectedNodes.add(node.id);
               }
             }
-            if(selectedNodes.size === 1) {
-              let id = Array.from(selectedNodes)[0];
+    
+            // Show sidebar if only one node is selected.
+            if (selectedNodes.size === 1) {
+              const [id] = Array.from(selectedNodes);
               showSidebar(familyTree.nodes[id]);
             } else {
               hideSidebar();
@@ -1002,6 +1032,7 @@
         }
       }
     });
+
     canvas.addEventListener('mouseleave', e => {
       isPanning = false;
       isDraggingGroup = false;
