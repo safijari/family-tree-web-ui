@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <!-- Ensure the layout works on mobile devices -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Family Tree Drawer</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: sans-serif; }
+    canvas { background: #f0f0f0; display: block; }
+    /* Sidebar for editing node details */
+    #sidebar {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(255,255,255,0.95);
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      max-width: 250px;
+      z-index: 10;
+    }
+    #sidebar input, #sidebar button, #sidebar select {
+      width: 100%;
+      margin-bottom: 5px;
+    }
+    /* Toolbar for New, Save, Load */
+    #toolbar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(255,255,255,0.95);
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      z-index: 10;
+    }
+    /* Area for pasting in/out JSON data */
+    #saveLoadArea {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      right: 10px;
+      background: rgba(255,255,255,0.95);
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+      display: none;
+      z-index: 10;
+    }
+    #saveLoadArea textarea {
+      width: 100%;
+      height: 100px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="treeCanvas"></canvas>
+
+  <!-- Sidebar for editing the selected node -->
+  <div id="sidebar" style="display:none;">
+    <h3>Node Details</h3>
+    <label>Name:</label>
+    <input type="text" id="nodeName">
+    <label>Sex:</label>
+    <select id="nodeSex">
+      <option value="Male">Male</option>
+      <option value="Female">Female</option>
+      <option value="Other">Other</option>
+    </select>
+    <label>Phone:</label>
+    <input type="text" id="nodePhone">
+    <label>Birthday:</label>
+    <input type="date" id="nodeBirthday">
+    <button id="deleteNode">Delete Node</button>
+    <hr>
+    <button id="addPartner">Add New Partner</button>
+    <button id="linkExistingPartner">Link Existing Partner</button>
+    <hr>
+    <button id="addChild">Add New Child</button>
+    <button id="linkExistingChild">Link Existing Child</button>
+  </div>
+
+  <!-- Toolbar for New, Save, Load -->
+  <div id="toolbar">
+    <button id="newTree">New Tree</button>
+    <button id="saveTree">Save Tree</button>
+    <button id="loadTree">Load Tree</button>
+  </div>
+
+  <!-- Area for pasting in/out JSON data -->
+  <div id="saveLoadArea">
+    <textarea id="treeData"></textarea>
+    <button id="loadTreeData">Load Data</button>
+    <button id="cancelLoad">Cancel</button>
+  </div>
+
+  <script>
+    /* ========= Global Variables and Initialization ========= */
+    const canvas = document.getElementById('treeCanvas');
+    const ctx = canvas.getContext('2d');
+    let canvasWidth = window.innerWidth;
+    let canvasHeight = window.innerHeight;
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    window.addEventListener('resize', () => {
+      canvasWidth = window.innerWidth;
+      canvasHeight = window.innerHeight;
+      canvas.width = canvasWidth;
+      canvas.height = canvasHeight;
+      draw();
+    });
+
+    // “World” view variables – these let the canvas appear “infinite”
+    let offsetX = -canvasWidth / 2;
+    let offsetY = -canvasHeight / 2;
+    let scale = 1;
+
+    // Data structure for the family tree.
+    // Each node has id, name, sex, phone, birthday, x/y coordinates,
+    // plus arrays for partner and child node IDs.
+    let familyTree = { nodes: {} };
+    let nextNodeId = 1;
+
+    // Constants for drawing nodes. (Height increased for 4 fields.)
+    const nodeWidth = 100;
+    const nodeHeight = 70;
+    const margin = 10; // used for collision resolution
+
+    // The currently selected node (if any)
+    let selectedNode = null;
+
+    // Modes for linking (null, "partner", or "child")
+    let linkingMode = null;
+
+    // Mouse state variables for panning and node dragging
+    let isPanning = false;
+    let panStart = { x: 0, y: 0 };
+    let isDraggingNode = false;
+    let dragStart = { x: 0, y: 0 };
+    let originalNodePos = { x: 0, y: 0 };
+
+    // Touch state variables (for mobile support)
+    let touchMode = null; // either "pan" or "pinch"
+    let lastTouchPos = null;
+    let initialPinchDist = 0;
+    let initialScale = 1;
+    let initialOffset = { x: 0, y: 0 };
+    let touchStartTime = 0;
+    let touchStartPos = null;
+
+    // Utility functions to convert between “world” and screen coordinates.
+    function worldToScreen(x, y) {
+      return {
+        x: (x - offsetX) * scale,
+        y: (y - offsetY) * scale
+      };
+    }
+    function screenToWorld(x, y) {
+      return {
+        x: x / scale + offsetX,
+        y: y / scale + offsetY
+      };
+    }
+
+    /* ========= Collision Detection & Resolution ========= */
+    // Returns true if the rectangle at (x, y) (with nodeWidth/nodeHeight)
+    // overlaps any existing node (except a node with id == excludeId, if provided)
+    function isCollision(x, y, excludeId = null) {
+      for (const id in familyTree.nodes) {
+        if (excludeId && parseInt(id) === excludeId) continue;
+        const node = familyTree.nodes[id];
+        if (!(x + nodeWidth <= node.x ||
+              x >= node.x + nodeWidth ||
+              y + nodeHeight <= node.y ||
+              y >= node.y + nodeHeight)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    // Given a desired position (x,y), find a nearby position that does not collide.
+    function findNonCollidingPosition(x, y, excludeId = null) {
+      let newX = x, newY = y, iterations = 0;
+      const maxIterations = 100;
+      while (isCollision(newX, newY, excludeId) && iterations < maxIterations) {
+        newX += nodeWidth + margin;
+        // If newX goes too far, reset newX and try moving down.
+        if(newX > x + (canvasWidth / scale)) {
+          newX = x;
+          newY += nodeHeight + margin;
+        }
+        iterations++;
+      }
+      return [newX, newY];
+    }
+
+    /* ========= Node Creation and Manipulation ========= */
+    // Create a new node at a given world position.
+    // A birthday property is added (defaults to an empty string).
+    function addNode(x, y, data = {}) {
+      // Find a free position so that the new node does not intersect any others.
+      [x, y] = findNonCollidingPosition(x, y);
+      const node = {
+        id: nextNodeId++,
+        name: data.name || "Name",
+        sex: data.sex || "Male",
+        phone: data.phone || "",
+        birthday: data.birthday || "",
+        x: x,
+        y: y,
+        partners: [],
+        children: []
+      };
+      familyTree.nodes[node.id] = node;
+      return node;
+    }
+
+    // Remove a node and all references to it in partner/child lists.
+    function deleteNode(node) {
+      if (!node) return;
+      node.partners.forEach(partnerId => {
+        const partner = familyTree.nodes[partnerId];
+        if (partner) {
+          partner.partners = partner.partners.filter(id => id !== node.id);
+        }
+      });
+      for (const id in familyTree.nodes) {
+        const n = familyTree.nodes[id];
+        n.children = n.children.filter(childId => childId !== node.id);
+      }
+      delete familyTree.nodes[node.id];
+      if (selectedNode && selectedNode.id === node.id) {
+        selectedNode = null;
+        hideSidebar();
+      }
+    }
+
+    // Return the node (if any) that contains the given world coordinates.
+    function getNodeAt(worldX, worldY) {
+      const nodes = Object.values(familyTree.nodes);
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        const node = nodes[i];
+        if (worldX >= node.x && worldX <= node.x + nodeWidth &&
+            worldY >= node.y && worldY <= node.y + nodeHeight) {
+          return node;
+        }
+      }
+      return null;
+    }
+
+    // After dragging, adjust a node if it now collides with another.
+    function resolveCollisionForNode(node) {
+      if (!node) return;
+      [node.x, node.y] = findNonCollidingPosition(node.x, node.y, node.id);
+    }
+
+    /* ========= Drawing ========= */
+    function draw() {
+      ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+      // Draw connections (children and partners) first.
+      for (const id in familyTree.nodes) {
+        const node = familyTree.nodes[id];
+
+        // Draw lines from parent to child.
+        node.children.forEach(childId => {
+          const child = familyTree.nodes[childId];
+          if (child) {
+            const parentScreen = worldToScreen(node.x + nodeWidth / 2, node.y + nodeHeight);
+            const childScreen = worldToScreen(child.x + nodeWidth / 2, child.y);
+            ctx.beginPath();
+            ctx.moveTo(parentScreen.x, parentScreen.y);
+            ctx.lineTo(childScreen.x, childScreen.y);
+            ctx.strokeStyle = 'black';
+            ctx.stroke();
+          }
+        });
+
+        // Draw lines connecting partners (draw each only once).
+        node.partners.forEach(partnerId => {
+          if (node.id < partnerId) {
+            const partner = familyTree.nodes[partnerId];
+            if (partner) {
+              const nodeScreen = worldToScreen(node.x + nodeWidth, node.y + nodeHeight / 2);
+              const partnerScreen = worldToScreen(partner.x, partner.y + nodeHeight / 2);
+              ctx.beginPath();
+              ctx.moveTo(nodeScreen.x, nodeScreen.y);
+              ctx.lineTo(partnerScreen.x, partnerScreen.y);
+              ctx.strokeStyle = 'red';
+              ctx.stroke();
+            }
+          }
+        });
+      }
+
+      // Now draw the nodes.
+      for (const id in familyTree.nodes) {
+        const node = familyTree.nodes[id];
+        const screenPos = worldToScreen(node.x, node.y);
+        ctx.beginPath();
+        ctx.rect(screenPos.x, screenPos.y, nodeWidth * scale, nodeHeight * scale);
+        ctx.fillStyle = (selectedNode && selectedNode.id === node.id) ? '#ffffcc' : 'white';
+        ctx.fill();
+        ctx.strokeStyle = 'black';
+        ctx.stroke();
+
+        // Draw the node's text (name, sex, phone, birthday)
+        ctx.fillStyle = 'black';
+        ctx.font = (12 * scale) + "px sans-serif";
+        ctx.textBaseline = "top";
+        const textX = screenPos.x + 5 * scale;
+        const textY = screenPos.y + 5 * scale;
+        ctx.fillText(node.name, textX, textY);
+        ctx.fillText(node.sex, textX, textY + 14 * scale);
+        ctx.fillText(node.phone, textX, textY + 28 * scale);
+        ctx.fillText(node.birthday, textX, textY + 42 * scale);
+      }
+    }
+
+    /* ========= Sidebar for Node Editing ========= */
+    const sidebar = document.getElementById('sidebar');
+    const nodeNameInput = document.getElementById('nodeName');
+    const nodeSexSelect = document.getElementById('nodeSex');
+    const nodePhoneInput = document.getElementById('nodePhone');
+    const nodeBirthdayInput = document.getElementById('nodeBirthday');
+    const deleteNodeButton = document.getElementById('deleteNode');
+    const addPartnerButton = document.getElementById('addPartner');
+    const linkExistingPartnerButton = document.getElementById('linkExistingPartner');
+    const addChildButton = document.getElementById('addChild');
+    const linkExistingChildButton = document.getElementById('linkExistingChild');
+
+    function showSidebar(node) {
+      if (!node) return;
+      sidebar.style.display = 'block';
+      nodeNameInput.value = node.name;
+      nodeSexSelect.value = node.sex;
+      nodePhoneInput.value = node.phone;
+      nodeBirthdayInput.value = node.birthday;
+    }
+    function hideSidebar() {
+      sidebar.style.display = 'none';
+    }
+
+    // Automatically update node properties as new data is entered.
+    nodeNameInput.addEventListener('input', () => {
+      if (selectedNode) {
+        selectedNode.name = nodeNameInput.value;
+        draw();
+      }
+    });
+    nodeSexSelect.addEventListener('change', () => {
+      if (selectedNode) {
+        selectedNode.sex = nodeSexSelect.value;
+        draw();
+      }
+    });
+    nodePhoneInput.addEventListener('input', () => {
+      if (selectedNode) {
+        selectedNode.phone = nodePhoneInput.value;
+        draw();
+      }
+    });
+    nodeBirthdayInput.addEventListener('input', () => {
+      if (selectedNode) {
+        selectedNode.birthday = nodeBirthdayInput.value;
+        draw();
+      }
+    });
+
+    deleteNodeButton.addEventListener('click', () => {
+      if (selectedNode && confirm("Delete this node?")) {
+        deleteNode(selectedNode);
+        draw();
+      }
+    });
+
+    // "Add New Partner" creates a new node to the right and links it.
+    addPartnerButton.addEventListener('click', () => {
+      if (selectedNode) {
+        const newX = selectedNode.x + nodeWidth + margin;
+        const newY = selectedNode.y;
+        const newNode = addNode(newX, newY);
+        selectedNode.partners.push(newNode.id);
+        newNode.partners.push(selectedNode.id);
+        draw();
+      }
+    });
+
+    // "Link Existing Partner" prompts the user to select from available nodes.
+    linkExistingPartnerButton.addEventListener('click', () => {
+      if (selectedNode) {
+        // Exclude the current node and already linked partners.
+        const excludeIds = [selectedNode.id, ...selectedNode.partners];
+        const options = Object.values(familyTree.nodes).filter(n => !excludeIds.includes(n.id));
+        if (options.length === 0) {
+          alert("No available nodes to link as partner.");
+          return;
+        }
+        let promptMessage = "Enter the ID of the node to link as partner:\n";
+        options.forEach(n => { promptMessage += n.id + ": " + n.name + "\n"; });
+        const choice = prompt(promptMessage);
+        if (choice) {
+          const chosen = options.find(n => n.id == choice);
+          if (chosen) {
+            selectedNode.partners.push(chosen.id);
+            chosen.partners.push(selectedNode.id);
+            draw();
+          }
+        }
+      }
+    });
+
+    // "Add New Child" creates a new node below and links it as a child.
+    addChildButton.addEventListener('click', () => {
+      if (selectedNode) {
+        const newX = selectedNode.x;
+        const newY = selectedNode.y + nodeHeight + margin * 5;
+        const newNode = addNode(newX, newY);
+        selectedNode.children.push(newNode.id);
+        // Also add the child to any partners of the selected node.
+        selectedNode.partners.forEach(partnerId => {
+          const partner = familyTree.nodes[partnerId];
+          if (partner && !partner.children.includes(newNode.id)) {
+            partner.children.push(newNode.id);
+          }
+        });
+        draw();
+      }
+    });
+
+    // "Link Existing Child" prompts for an existing node to add as a child.
+    linkExistingChildButton.addEventListener('click', () => {
+      if (selectedNode) {
+        const excludeIds = [selectedNode.id, ...selectedNode.children];
+        const options = Object.values(familyTree.nodes).filter(n => !excludeIds.includes(n.id));
+        if (options.length === 0) {
+          alert("No available nodes to link as child.");
+          return;
+        }
+        let promptMessage = "Enter the ID of the node to link as child:\n";
+        options.forEach(n => { promptMessage += n.id + ": " + n.name + "\n"; });
+        const choice = prompt(promptMessage);
+        if (choice) {
+          const chosen = options.find(n => n.id == choice);
+          if (chosen) {
+            selectedNode.children.push(chosen.id);
+            // Also add the child link to any partners.
+            selectedNode.partners.forEach(pid => {
+              const partner = familyTree.nodes[pid];
+              if (partner && !partner.children.includes(chosen.id)) {
+                partner.children.push(chosen.id);
+              }
+            });
+            draw();
+          }
+        }
+      }
+    });
+
+    /* ========= Toolbar for New, Save, Load ========= */
+    const newTreeButton = document.getElementById('newTree');
+    const saveTreeButton = document.getElementById('saveTree');
+    const loadTreeButton = document.getElementById('loadTree');
+    const saveLoadArea = document.getElementById('saveLoadArea');
+    const treeDataTextarea = document.getElementById('treeData');
+    const loadTreeDataButton = document.getElementById('loadTreeData');
+    const cancelLoadButton = document.getElementById('cancelLoad');
+
+    newTreeButton.addEventListener('click', () => {
+      if (confirm("Start a new tree? Current tree will be lost.")) {
+        familyTree = { nodes: {} };
+        nextNodeId = 1;
+        selectedNode = null;
+        hideSidebar();
+        draw();
+      }
+    });
+
+    // “Save Tree” puts the JSON string into the textarea.
+    saveTreeButton.addEventListener('click', () => {
+      treeDataTextarea.value = JSON.stringify(familyTree, null, 2);
+      saveLoadArea.style.display = 'block';
+    });
+
+    // “Load Tree” opens an empty textarea so you can paste JSON.
+    loadTreeButton.addEventListener('click', () => {
+      treeDataTextarea.value = "";
+      saveLoadArea.style.display = 'block';
+    });
+
+    loadTreeDataButton.addEventListener('click', () => {
+      try {
+        const loadedTree = JSON.parse(treeDataTextarea.value);
+        if (loadedTree && loadedTree.nodes) {
+          familyTree = loadedTree;
+          nextNodeId = 1;
+          for (const id in familyTree.nodes) {
+            const numId = parseInt(id, 10);
+            if (numId >= nextNodeId) { nextNodeId = numId + 1; }
+          }
+          selectedNode = null;
+          hideSidebar();
+          saveLoadArea.style.display = 'none';
+          draw();
+        } else {
+          alert("Invalid tree data.");
+        }
+      } catch (e) {
+        alert("Error loading tree data: " + e);
+      }
+    });
+
+    cancelLoadButton.addEventListener('click', () => {
+      saveLoadArea.style.display = 'none';
+    });
+
+    /* ========= Mouse Event Handlers ========= */
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+    canvas.addEventListener('mousedown', e => {
+      const pos = { x: e.offsetX, y: e.offsetY };
+      const worldPos = screenToWorld(pos.x, pos.y);
+
+      // For left-click (button 0)...
+      if (e.button === 0) {
+        // If in a linking mode, try to use the clicked node.
+        if (linkingMode && selectedNode) {
+          const node = getNodeAt(worldPos.x, worldPos.y);
+          if (node && node.id !== selectedNode.id) {
+            if (linkingMode === "partner") {
+              // Link as partner if not already linked.
+              if (!selectedNode.partners.includes(node.id)) {
+                selectedNode.partners.push(node.id);
+                node.partners.push(selectedNode.id);
+              }
+            } else if (linkingMode === "child") {
+              if (!selectedNode.children.includes(node.id)) {
+                selectedNode.children.push(node.id);
+                // Also add the child link for any partners.
+                selectedNode.partners.forEach(pid => {
+                  const partner = familyTree.nodes[pid];
+                  if (partner && !partner.children.includes(node.id)) {
+                    partner.children.push(node.id);
+                  }
+                });
+              }
+            }
+            linkingMode = null;
+            draw();
+            return;
+          }
+        }
+        // Otherwise, check for a node under the pointer.
+        const node = getNodeAt(worldPos.x, worldPos.y);
+        if (node) {
+          selectedNode = node;
+          showSidebar(selectedNode);
+          isDraggingNode = true;
+          dragStart = { x: worldPos.x, y: worldPos.y };
+          originalNodePos = { x: node.x, y: node.y };
+        } else {
+          // No node here, so create a new node.
+          const newNode = addNode(worldPos.x, worldPos.y);
+          selectedNode = newNode;
+          showSidebar(selectedNode);
+          draw();
+        }
+      }
+      else if (e.button === 2) { // Right-click: start panning.
+        isPanning = true;
+        panStart = { x: pos.x, y: pos.y };
+      }
+    });
+
+    canvas.addEventListener('mousemove', e => {
+      const pos = { x: e.offsetX, y: e.offsetY };
+      const worldPos = screenToWorld(pos.x, pos.y);
+      if (isPanning) {
+        const dx = e.offsetX - panStart.x;
+        const dy = e.offsetY - panStart.y;
+        offsetX -= dx / scale;
+        offsetY -= dy / scale;
+        panStart = { x: e.offsetX, y: e.offsetY };
+        draw();
+      } else if (isDraggingNode && selectedNode) {
+        const dx = worldPos.x - dragStart.x;
+        const dy = worldPos.y - dragStart.y;
+        selectedNode.x = originalNodePos.x + dx;
+        selectedNode.y = originalNodePos.y + dy;
+        draw();
+      }
+    });
+
+    canvas.addEventListener('mouseup', () => {
+      // When releasing a dragged node, adjust its position if colliding.
+      if (isDraggingNode && selectedNode) {
+        resolveCollisionForNode(selectedNode);
+      }
+      isPanning = false;
+      isDraggingNode = false;
+      draw();
+    });
+    canvas.addEventListener('mouseleave', () => {
+      isPanning = false;
+      isDraggingNode = false;
+    });
+
+    // Zoom using the mouse wheel (centered on the cursor).
+    canvas.addEventListener('wheel', e => {
+      e.preventDefault();
+      const mousePos = { x: e.offsetX, y: e.offsetY };
+      const worldPosBefore = screenToWorld(mousePos.x, mousePos.y);
+      const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
+      scale *= zoomFactor;
+      const worldPosAfter = screenToWorld(mousePos.x, mousePos.y);
+      offsetX += worldPosBefore.x - worldPosAfter.x;
+      offsetY += worldPosBefore.y - worldPosAfter.y;
+      draw();
+    });
+
+    /* ========= Touch Event Handlers (for mobile devices) ========= */
+    canvas.addEventListener('touchstart', e => {
+      e.preventDefault();
+      if (e.touches.length === 1) {
+        touchMode = 'pan';
+        const touch = e.touches[0];
+        lastTouchPos = { x: touch.clientX, y: touch.clientY };
+        touchStartTime = Date.now();
+        touchStartPos = { x: touch.clientX, y: touch.clientY };
+      } else if (e.touches.length === 2) {
+        touchMode = 'pinch';
+        const touch1 = e.touches[0];
+        const touch2 = e.touches[1];
+        initialPinchDist = Math.hypot(touch2.clientX - touch1.clientX, touch2.clientY - touch1.clientY);
+        initialScale = scale;
+        initialOffset = { x: offsetX, y: offsetY };
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', e => {
+      e.preventDefault();
+      if (touchMode === 'pan' && e.touches.length === 1) {
+        const touch = e.touches[0];
+        const dx = touch.clientX - lastTouchPos.x;
+        const dy = touch.clientY - lastTouchPos.y;
+        offsetX -= dx / scale;
+        offsetY -= dy / scale;
+        lastTouchPos = { x: touch.clientX, y: touch.clientY };
+        draw();
+      } else if (touchMode === 'pinch' && e.touches.length === 2) {
+        const touch1 = e.touches[0];
+        const touch2 = e.touches[1];
+        const currentDist = Math.hypot(touch2.clientX - touch1.clientX, touch2.clientY - touch1.clientY);
+        const zoomFactor = currentDist / initialPinchDist;
+        scale = initialScale * zoomFactor;
+        draw();
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', e => {
+      if (touchMode === 'pan' && e.touches.length === 0) {
+        const touchDuration = Date.now() - touchStartTime;
+        if (touchDuration < 300 && touchStartPos) {
+          const worldPos = screenToWorld(touchStartPos.x, touchStartPos.y);
+          const node = getNodeAt(worldPos.x, worldPos.y);
+          if (node) {
+            selectedNode = node;
+            showSidebar(selectedNode);
+          } else {
+            const newNode = addNode(worldPos.x, worldPos.y);
+            selectedNode = newNode;
+            showSidebar(selectedNode);
+          }
+          draw();
+        }
+        touchMode = null;
+      } else if (touchMode === 'pinch' && e.touches.length < 2) {
+        touchMode = null;
+      }
+    });
+
+    /* ========= Initial Draw ========= */
+    draw();
+  </script>
+</body>
+</html>
