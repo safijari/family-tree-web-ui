@@ -57,6 +57,20 @@
       width: 100%;
       height: 100px;
     }
+    /* Help Modal */
+    #helpModal {
+      display: none;
+      position: fixed;
+      top: 50px;
+      left: 50px;
+      right: 50px;
+      bottom: 50px;
+      background: white;
+      border: 1px solid #ccc;
+      padding: 20px;
+      z-index: 20;
+      overflow: auto;
+    }
   </style>
 </head>
 <body>
@@ -96,6 +110,7 @@
     <button id="organizeTree">Organize Tree</button>
     <button id="undoBtn">Undo</button>
     <button id="redoBtn">Redo</button>
+    <button id="helpButton">Help</button>
   </div>
 
   <!-- Area for JSON save/load or subtree import -->
@@ -103,6 +118,24 @@
     <textarea id="treeData"></textarea>
     <button id="loadTreeData">Load Data</button>
     <button id="cancelLoad">Cancel</button>
+  </div>
+
+  <!-- Help Modal -->
+  <div id="helpModal">
+    <h2>Family Tree Drawer - Help</h2>
+    <p>This app allows you to create and manage family trees. Here is how to use the app:</p>
+    <ul>
+      <li><strong>Add Node:</strong> Click "Add Node" to add a node at the current cursor position.</li>
+      <li><strong>Edit Node:</strong> Click on an existing node to open the sidebar for editing details.</li>
+      <li><strong>Move Node:</strong> Drag a node to reposition it.</li>
+      <li><strong>Pan:</strong> Click and drag on empty space to pan the view.</li>
+      <li><strong>Zoom:</strong> Use the mouse wheel (or pinch on touch devices) to zoom in/out.</li>
+      <li><strong>Save/Load:</strong> Use the Save Tree and Load Tree buttons to persist or load your work.</li>
+      <li><strong>Import Subtree:</strong> Import a subtree by pasting valid JSON data.</li>
+      <li><strong>Organize Tree:</strong> Use the Organize Tree button to auto-layout your family tree.</li>
+      <li><strong>Undo/Redo:</strong> Use the Undo and Redo buttons to revert changes.</li>
+    </ul>
+    <button id="closeHelp">Close</button>
   </div>
 
   <script>
@@ -659,6 +692,9 @@
     const treeDataTextarea = document.getElementById('treeData');
     const loadTreeDataButton = document.getElementById('loadTreeData');
     const cancelLoadButton = document.getElementById('cancelLoad');
+    const helpButton = document.getElementById('helpButton');
+    const helpModal = document.getElementById('helpModal');
+    const closeHelp = document.getElementById('closeHelp');
 
     newTreeButton.addEventListener('click', () => {
       if(confirm("Start a new tree? Current tree will be lost.")){
@@ -733,6 +769,12 @@
     });
     undoBtn.addEventListener('click', () => { undo(); });
     redoBtn.addEventListener('click', () => { redo(); });
+    helpButton.addEventListener('click', () => {
+      helpModal.style.display = 'block';
+    });
+    closeHelp.addEventListener('click', () => {
+      helpModal.style.display = 'none';
+    });
 
     /* ========= Mouse Event Handlers ========= */
     let isPanning = false;
@@ -774,18 +816,23 @@
     });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-    // Zoom using the mouse wheel (centered on the cursor).
+    // Zoom with mouse wheel
     canvas.addEventListener('wheel', e => {
       e.preventDefault();
       const mousePos = { x: e.offsetX, y: e.offsetY };
+      const wheelDelta = e.deltaY;
+      const zoomFactor = 1.1;
       const worldPosBefore = screenToWorld(mousePos.x, mousePos.y);
-      const zoomFactor = e.deltaY < 0 ? 1.01 : 0.91;
-      scale *= zoomFactor;
+      if (wheelDelta < 0) {
+        scale *= zoomFactor;
+      } else {
+        scale /= zoomFactor;
+      }
       const worldPosAfter = screenToWorld(mousePos.x, mousePos.y);
       offsetX += worldPosBefore.x - worldPosAfter.x;
       offsetY += worldPosBefore.y - worldPosAfter.y;
       draw();
-    });
+    }, { passive: false });
 
     /* ========= Touch Event Handlers (for mobile) ========= */
     let touchMode = null; // "pan" or "pinch"
