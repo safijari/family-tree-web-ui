@@ -40,7 +40,7 @@
       display: block;
       width: 150px;
     }
-    /* Area for pasting/loading JSON data */
+    /* Area for JSON save/load */
     #saveLoadArea {
       position: absolute;
       bottom: 10px;
@@ -92,12 +92,13 @@
     <button id="saveTree">Save Tree</button>
     <button id="loadTree">Load Tree</button>
     <button id="addNode">Add Node</button>
+    <button id="importSubtree">Import Subtree</button>
     <button id="organizeTree">Organize Tree</button>
     <button id="undoBtn">Undo</button>
     <button id="redoBtn">Redo</button>
   </div>
 
-  <!-- Area for JSON save/load -->
+  <!-- Area for JSON save/load or subtree import -->
   <div id="saveLoadArea">
     <textarea id="treeData"></textarea>
     <button id="loadTreeData">Load Data</button>
@@ -112,7 +113,6 @@
     let canvasHeight = window.innerHeight;
     canvas.width = canvasWidth;
     canvas.height = canvasHeight;
-
     window.addEventListener('resize', () => {
       canvasWidth = window.innerWidth;
       canvasHeight = window.innerHeight;
@@ -121,16 +121,15 @@
       draw();
     });
 
-    // "World" view variables (for an "infinite" canvas)
+    // "World" view variables for an infinite canvas.
     let offsetX = -canvasWidth / 2;
     let offsetY = -canvasHeight / 2;
     let scale = 1;
 
-    // Track the last mouse position (for "Add Node" placement)
+    // Track the last mouse position (for adding a node at the cursor).
     let lastMousePos = null;
     canvas.addEventListener('mousemove', e => {
       lastMousePos = { x: e.offsetX, y: e.offsetY };
-      // If panning or dragging, that is handled below.
       if(isPanning){
         const dx = e.offsetX - panStart.x;
         const dy = e.offsetY - panStart.y;
@@ -146,7 +145,14 @@
       }
     });
 
-    // Utility functions to convert coordinates.
+    // Allow pressing the "a" key to add a node.
+    document.addEventListener('keydown', e => {
+      if(e.key.toLowerCase() === 'a'){
+        document.getElementById('addNode').click();
+      }
+    });
+
+    // Utility functions to convert between world and screen coordinates.
     function worldToScreen(x, y) {
       return {
         x: (x - offsetX) * scale,
@@ -161,19 +167,18 @@
     }
 
     // Data structure for the family tree.
-    // Each node has id, name, sex, phone, birthday, x/y coordinates,
+    // Each node has an id, name, sex, phone, birthday, x/y coordinates,
     // plus arrays for partner and child node IDs.
     let familyTree = { nodes: {} };
     let nextNodeId = 1;
     const nodeWidth = 100;
     const nodeHeight = 70;
-    const margin = 10; // used in collision resolution
+    const margin = 10; // for collision resolution
 
-    // Try to load tree and history from localStorage.
+    // Load tree and history from localStorage.
     if(localStorage.getItem("familyTree")){
       try {
         familyTree = JSON.parse(localStorage.getItem("familyTree"));
-        // Update nextNodeId from loaded data.
         nextNodeId = 1;
         for (const id in familyTree.nodes) {
           let nid = parseInt(id, 10);
@@ -188,7 +193,7 @@
 
     /* ========= History Management (Undo/Redo) ========= */
     function saveHistory() {
-      // Save a deep clone (JSON string) of familyTree.
+      // Save a deep clone of familyTree.
       undoStack.push(JSON.stringify(familyTree));
       if(undoStack.length > 100) undoStack.shift();
       redoStack = []; // clear redo on new change
@@ -196,7 +201,6 @@
       localStorage.setItem("undoStack", JSON.stringify(undoStack));
       localStorage.setItem("redoStack", JSON.stringify(redoStack));
     }
-    // For rapid changes (like typing), use a debounce.
     let saveTimeout;
     function scheduleSaveHistory() {
       if(saveTimeout) clearTimeout(saveTimeout);
@@ -210,7 +214,6 @@
         redoStack.push(JSON.stringify(familyTree));
         let prev = undoStack.pop();
         familyTree = JSON.parse(prev);
-        // Recompute nextNodeId.
         nextNodeId = 1;
         for (const id in familyTree.nodes) {
           let nid = parseInt(id,10);
@@ -240,7 +243,6 @@
     }
 
     /* ========= Collision Detection & Resolution ========= */
-    // Returns true if the rectangle at (x,y) overlaps any other node (except excludeId).
     function isCollision(x, y, excludeId = null) {
       for (const id in familyTree.nodes) {
         if (excludeId && parseInt(id) === excludeId) continue;
@@ -254,7 +256,6 @@
       }
       return false;
     }
-    // Given (x,y), find a nearby position that does not collide.
     function findNonCollidingPosition(x, y, excludeId = null) {
       let newX = x, newY = y, iterations = 0;
       const maxIterations = 100;
@@ -270,7 +271,6 @@
     }
 
     /* ========= Node Creation and Manipulation ========= */
-    // Create a new node at (x,y) (adjusting to avoid collisions).
     function addNode(x, y, data = {}) {
       [x, y] = findNonCollidingPosition(x, y);
       const node = {
@@ -288,7 +288,6 @@
       saveHistory();
       return node;
     }
-    // Remove a node and its references.
     function deleteNode(node) {
       if(!node) return;
       node.partners.forEach(pid => {
@@ -308,7 +307,6 @@
       }
       saveHistory();
     }
-    // Return node at given world coordinates.
     function getNodeAt(worldX, worldY) {
       const nodes = Object.values(familyTree.nodes);
       for(let i = nodes.length - 1; i >= 0; i--){
@@ -320,7 +318,6 @@
       }
       return null;
     }
-    // After dragging, resolve any collisions.
     function resolveCollisionForNode(node) {
       if(!node) return;
       [node.x, node.y] = findNonCollidingPosition(node.x, node.y, node.id);
@@ -329,10 +326,9 @@
     /* ========= Drawing ========= */
     function draw() {
       ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-      // Draw connections first.
+      // Draw connections.
       for (const id in familyTree.nodes) {
         let node = familyTree.nodes[id];
-        // Parent-to-child lines.
         node.children.forEach(childId => {
           let child = familyTree.nodes[childId];
           if(child){
@@ -345,7 +341,6 @@
             ctx.stroke();
           }
         });
-        // Partner lines (draw each only once).
         node.partners.forEach(pid => {
           if(node.id < pid){
             let partner = familyTree.nodes[pid];
@@ -371,7 +366,6 @@
         ctx.fill();
         ctx.strokeStyle = 'black';
         ctx.stroke();
-        // Draw text.
         ctx.fillStyle = 'black';
         ctx.font = (12*scale) + "px sans-serif";
         ctx.textBaseline = "top";
@@ -385,86 +379,147 @@
     }
 
     /* ========= Organization ========= */
-    // A simple layout that assigns generation levels (parents above children)
-    // and groups nodes with partner relationships in each level.
+    // This algorithm groups nodes by coupling and computes a generation level for each union.
     function organizeTree() {
-      const nodesArr = Object.values(familyTree.nodes);
-      // Determine which nodes are children (appear in any children array)
-      let childSet = new Set();
-      nodesArr.forEach(n => n.children.forEach(cid => childSet.add(cid)));
-      // Compute generation levels (roots are level 0)
-      let generation = {};
-      nodesArr.forEach(n => {
-        if(!childSet.has(n.id)) generation[n.id] = 0;
-        else generation[n.id] = 0; // initialize
-      });
+      // 1. Build union-find for partner relationships.
+      let uf = {};
+      function find(x) {
+        if(uf[x] === undefined) { uf[x] = x; }
+        if(uf[x] !== x) uf[x] = find(uf[x]);
+        return uf[x];
+      }
+      function union(x, y) {
+        let rx = find(x), ry = find(y);
+        if(rx !== ry) { uf[ry] = rx; }
+      }
+      for (const id in familyTree.nodes) {
+        let node = familyTree.nodes[id];
+        if(node.partners){
+          node.partners.forEach(pid => union(node.id, pid));
+        }
+      }
+      // Build union groups.
+      let groups = {};
+      for (const id in familyTree.nodes) {
+        let groupId = find(familyTree.nodes[id].id);
+        if(!groups[groupId]) groups[groupId] = [];
+        groups[groupId].push(familyTree.nodes[id].id);
+      }
+      // 2. Build a map of nodeId to its parents.
+      let parentsMap = {};
+      for (const id in familyTree.nodes) {
+        let node = familyTree.nodes[id];
+        node.children.forEach(childId => {
+          if(!parentsMap[childId]) parentsMap[childId] = [];
+          parentsMap[childId].push(node.id);
+        });
+      }
+      // 3. For each union group, compute a generation level.
+      let groupLevel = {};
+      for (const gid in groups) {
+        groupLevel[gid] = 0;
+      }
       let changed = true;
       while(changed){
         changed = false;
-        nodesArr.forEach(n => {
-          let g = generation[n.id];
-          n.children.forEach(cid => {
-            if(generation[cid] < g + 1){
-              generation[cid] = g + 1;
-              changed = true;
+        for (const gid in groups) {
+          let newLevel = 0;
+          groups[gid].forEach(nodeId => {
+            if(parentsMap[nodeId]){
+              parentsMap[nodeId].forEach(pid => {
+                let pGroup = find(pid);
+                newLevel = Math.max(newLevel, groupLevel[pGroup] + 1);
+              });
             }
           });
+          if(newLevel > groupLevel[gid]){
+            groupLevel[gid] = newLevel;
+            changed = true;
+          }
+        }
+      }
+      // 4. Assign each node a generation level based on its union group.
+      let generation = {};
+      for (const id in familyTree.nodes) {
+        let gid = find(familyTree.nodes[id].id);
+        generation[id] = groupLevel[gid];
+      }
+      // 5. Group nodes by generation.
+      let levels = {};
+      for (const id in familyTree.nodes) {
+        let lvl = generation[id];
+        if(!levels[lvl]) levels[lvl] = [];
+        levels[lvl].push(familyTree.nodes[id]);
+      }
+      // 6. Layout each generation horizontally.
+      const verticalSpacing = nodeHeight + 50;
+      const horizontalSpacing = nodeWidth + 50;
+      for (let lvl in levels) {
+        let group = levels[lvl];
+        group.sort((a,b) => a.id - b.id);
+        let totalWidth = group.length * horizontalSpacing - 50;
+        let startX = - totalWidth / 2;
+        group.forEach((node, i) => {
+          node.x = startX + i * horizontalSpacing;
+          node.y = lvl * verticalSpacing;
         });
       }
-      // Group nodes by generation.
-      let groups = {};
-      nodesArr.forEach(n => {
-        let g = generation[n.id];
-        if(!groups[g]) groups[g] = [];
-        groups[g].push(n);
-      });
-      // Layout each generation.
-      const verticalSpacing = nodeHeight + 50;
-      const startY = 0;
-      const clusterMargin = 50;
-      const levels = Object.keys(groups).map(Number).sort((a, b) => a - b);
-      levels.forEach(level => {
-        let group = groups[level];
-        // Cluster nodes in this level by partner relationships.
-        let clusters = [];
-        let visited = new Set();
-        group.forEach(node => {
-          if(visited.has(node.id)) return;
-          let cluster = [];
-          function dfs(n) {
-            if(visited.has(n.id)) return;
-            visited.add(n.id);
-            cluster.push(n);
-            n.partners.forEach(pid => {
-              let partner = familyTree.nodes[pid];
-              if(partner && group.includes(partner)) dfs(partner);
-            });
-          }
-          dfs(node);
-          clusters.push(cluster);
-        });
-        // Compute total width needed.
-        let totalWidth = 0;
-        let clusterWidths = [];
-        clusters.forEach(cl => {
-          let w = cl.length * (nodeWidth + margin) - margin;
-          clusterWidths.push(w);
-          totalWidth += w;
-        });
-        totalWidth += (clusters.length - 1) * clusterMargin;
-        let currentX = -totalWidth / 2;
-        clusters.forEach((cluster, idx) => {
-          cluster.sort((a,b) => a.id - b.id);
-          let clusterWidth = cluster.length * (nodeWidth + margin) - margin;
-          cluster.forEach((node, i) => {
-            node.x = currentX + i * (nodeWidth + margin);
-            node.y = startY + level * verticalSpacing;
-          });
-          currentX += clusterWidth + clusterMargin;
-        });
-      });
       saveHistory();
       draw();
+    }
+
+    /* ========= Subtree Import ========= */
+    // Import a subtree (in the same format as our familyTree object)
+    function importSubtree(jsonData) {
+      try {
+        let subtree = JSON.parse(jsonData);
+        if(!subtree.nodes){
+          alert("Invalid subtree data.");
+          return;
+        }
+        // Build a mapping from old IDs to new IDs.
+        let idMap = {};
+        for (const oldId in subtree.nodes) {
+          let nodeData = subtree.nodes[oldId];
+          let newNode = {
+            id: nextNodeId++,
+            name: nodeData.name,
+            sex: nodeData.sex,
+            phone: nodeData.phone,
+            birthday: nodeData.birthday,
+            x: nodeData.x,
+            y: nodeData.y,
+            partners: [],
+            children: []
+          };
+          familyTree.nodes[newNode.id] = newNode;
+          idMap[oldId] = newNode.id;
+        }
+        // Update partner and children references.
+        for (const oldId in subtree.nodes) {
+          let nodeData = subtree.nodes[oldId];
+          let newId = idMap[oldId];
+          let newNode = familyTree.nodes[newId];
+          if(nodeData.partners){
+            nodeData.partners.forEach(pid => {
+              if(idMap[pid] && !newNode.partners.includes(idMap[pid])){
+                newNode.partners.push(idMap[pid]);
+              }
+            });
+          }
+          if(nodeData.children){
+            nodeData.children.forEach(cid => {
+              if(idMap[cid] && !newNode.children.includes(idMap[cid])){
+                newNode.children.push(idMap[cid]);
+              }
+            });
+          }
+        }
+        saveHistory();
+        draw();
+      } catch(e) {
+        alert("Error importing subtree: " + e);
+      }
     }
 
     /* ========= Sidebar for Node Editing ========= */
@@ -524,7 +579,6 @@
         draw();
       }
     });
-    // "Add New Partner" creates a new node to the right and links it.
     addPartnerButton.addEventListener('click', () => {
       if(selectedNode){
         const newX = selectedNode.x + nodeWidth + margin;
@@ -535,7 +589,6 @@
         draw();
       }
     });
-    // "Link Existing Partner" prompts the user to enter an ID.
     linkExistingPartnerButton.addEventListener('click', () => {
       if(selectedNode){
         const excludeIds = [selectedNode.id, ...selectedNode.partners];
@@ -558,7 +611,6 @@
         }
       }
     });
-    // "Add New Child" creates a new node below and links it.
     addChildButton.addEventListener('click', () => {
       if(selectedNode){
         const newX = selectedNode.x;
@@ -574,7 +626,6 @@
         draw();
       }
     });
-    // "Link Existing Child" prompts for an existing node ID.
     linkExistingChildButton.addEventListener('click', () => {
       if(selectedNode){
         const excludeIds = [selectedNode.id, ...selectedNode.children];
@@ -603,11 +654,12 @@
       }
     });
 
-    /* ========= Toolbar (New, Save, Load, Add Node, Organize, Undo/Redo) ========= */
+    /* ========= Toolbar ========= */
     const newTreeButton = document.getElementById('newTree');
     const saveTreeButton = document.getElementById('saveTree');
     const loadTreeButton = document.getElementById('loadTree');
     const addNodeButton = document.getElementById('addNode');
+    const importSubtreeButton = document.getElementById('importSubtree');
     const organizeTreeButton = document.getElementById('organizeTree');
     const undoBtn = document.getElementById('undoBtn');
     const redoBtn = document.getElementById('redoBtn');
@@ -634,6 +686,7 @@
       treeDataTextarea.value = "";
       saveLoadArea.style.display = 'block';
     });
+    // For "Load Tree", we replace the current tree.
     loadTreeDataButton.addEventListener('click', () => {
       try {
         let loadedTree = JSON.parse(treeDataTextarea.value);
@@ -659,8 +712,8 @@
     cancelLoadButton.addEventListener('click', () => {
       saveLoadArea.style.display = 'none';
     });
+    // "Add Node" button adds a node at the current cursor (or center)
     addNodeButton.addEventListener('click', () => {
-      // Add a node at lastMousePos (if available) or at canvas center.
       let pos;
       if(lastMousePos) pos = screenToWorld(lastMousePos.x, lastMousePos.y);
       else pos = { x: offsetX + canvasWidth/(2*scale), y: offsetY + canvasHeight/(2*scale) };
@@ -669,6 +722,16 @@
       showSidebar(newNode);
       draw();
     });
+    // "Import Subtree" opens the same text area with instructions.
+    importSubtreeButton.addEventListener('click', () => {
+      treeDataTextarea.value = "Paste subtree JSON here (must include a 'nodes' object):";
+      saveLoadArea.style.display = 'block';
+      // After the user clicks "Load Data", we import the subtree and merge it.
+      loadTreeDataButton.onclick = () => {
+        importSubtree(treeDataTextarea.value);
+        saveLoadArea.style.display = 'none';
+      };
+    });
     organizeTreeButton.addEventListener('click', () => {
       organizeTree();
     });
@@ -676,36 +739,30 @@
     redoBtn.addEventListener('click', () => { redo(); });
 
     /* ========= Mouse Event Handlers ========= */
-    // Left-click: if on a node, select and (optionally) drag it;
-    // if not on a node, begin panning.
     let isPanning = false;
     let isDraggingNode = false;
     let panStart = { x: 0, y: 0 };
     let dragStart = { x: 0, y: 0 };
     let originalNodePos = { x: 0, y: 0 };
-
+    let selectedNode = null;
     canvas.addEventListener('mousedown', e => {
-      // Left button only.
-      if(e.button !== 0) return;
+      if(e.button !== 0) return; // only left button
       const pos = { x: e.offsetX, y: e.offsetY };
       const worldPos = screenToWorld(pos.x, pos.y);
       const node = getNodeAt(worldPos.x, worldPos.y);
       if(node){
-        // Select node and start dragging.
         selectedNode = node;
         showSidebar(node);
         isDraggingNode = true;
         dragStart = worldPos;
         originalNodePos = { x: node.x, y: node.y };
       } else {
-        // Start panning.
         isPanning = true;
         panStart = { x: e.offsetX, y: e.offsetY };
       }
     });
     canvas.addEventListener('mouseup', e => {
       if(isDraggingNode && selectedNode){
-        // On finishing drag, resolve collisions.
         if(selectedNode.x !== originalNodePos.x || selectedNode.y !== originalNodePos.y){
           resolveCollisionForNode(selectedNode);
           saveHistory();
@@ -719,7 +776,6 @@
       isPanning = false;
       isDraggingNode = false;
     });
-    // Prevent context menu.
     canvas.addEventListener('contextmenu', e => e.preventDefault());
 
     /* ========= Touch Event Handlers (for mobile) ========= */
