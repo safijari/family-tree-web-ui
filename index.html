@@ -821,7 +821,7 @@
       e.preventDefault();
       const mousePos = { x: e.offsetX, y: e.offsetY };
       const wheelDelta = e.deltaY;
-      const zoomFactor = 1.1;
+      const zoomFactor = 1.05;
       const worldPosBefore = screenToWorld(mousePos.x, mousePos.y);
       if (wheelDelta < 0) {
         scale *= zoomFactor;
