@@ -127,12 +127,14 @@
     <ul>
       <li><strong>Add Node:</strong> Click "Add Node" to add a node at the current cursor position.</li>
       <li><strong>Edit Node:</strong> Click on an existing node to open the sidebar for editing details.</li>
-      <li><strong>Move Node:</strong> Drag a node to reposition it.</li>
-      <li><strong>Pan:</strong> Click and drag on empty space to pan the view.</li>
+      <li><strong>Move Node(s):</strong> If a node (or multiple nodes) is selected, drag it to move the selection.</li>
+      <li><strong>Box Selection:</strong> Left-click and drag on empty space to draw a selection box. Release to select all nodes within the box.</li>
+      <li><strong>Unselect All:</strong> Left-click (without dragging) on empty space to clear the selection.</li>
+      <li><strong>Pan:</strong> Right-click and drag to pan the view.</li>
       <li><strong>Zoom:</strong> Use the mouse wheel (or pinch on touch devices) to zoom in/out.</li>
       <li><strong>Save/Load:</strong> Use the Save Tree and Load Tree buttons to persist or load your work.</li>
       <li><strong>Import Subtree:</strong> Import a subtree by pasting valid JSON data.</li>
-      <li><strong>Organize Tree:</strong> Use the Organize Tree button to auto-layout your family tree.</li>
+      <li><strong>Organize Tree:</strong> If more than one node is selected, clicking Organize Tree will only layout the selected nodes; otherwise, the entire tree is organized.</li>
       <li><strong>Undo/Redo:</strong> Use the Undo and Redo buttons to revert changes.</li>
     </ul>
     <button id="closeHelp">Close</button>
@@ -159,38 +161,8 @@
     let offsetY = -canvasHeight / 2;
     let scale = 1;
 
-    // Track the last mouse position (for adding a node at the cursor).
+    // Track the last mouse position.
     let lastMousePos = null;
-    canvas.addEventListener('mousemove', e => {
-      lastMousePos = { x: e.offsetX, y: e.offsetY };
-      if(isPanning){
-        const dx = e.offsetX - panStart.x;
-        const dy = e.offsetY - panStart.y;
-        offsetX -= dx / scale;
-        offsetY -= dy / scale;
-        panStart = { x: e.offsetX, y: e.offsetY };
-        draw();
-      } else if(isDraggingNode && selectedNode) {
-        const worldPos = screenToWorld(e.offsetX, e.offsetY);
-        selectedNode.x = originalNodePos.x + (worldPos.x - dragStart.x);
-        selectedNode.y = originalNodePos.y + (worldPos.y - dragStart.y);
-        draw();
-      }
-    });
-
-    // Utility functions to convert between world and screen coordinates.
-    function worldToScreen(x, y) {
-      return {
-        x: (x - offsetX) * scale,
-        y: (y - offsetY) * scale
-      };
-    }
-    function screenToWorld(x, y) {
-      return {
-        x: x / scale + offsetX,
-        y: y / scale + offsetY
-      };
-    }
 
     // Data structure for the family tree.
     let familyTree = { nodes: {} };
@@ -198,6 +170,21 @@
     const nodeWidth = 100;
     const nodeHeight = 70;
     const margin = 10; // for collision resolution
+
+    // Selected nodes (for group selection) instead of a single selectedNode.
+    let selectedNodes = new Set();
+
+    // Variables for left-click selection/dragging.
+    let isSelecting = false;
+    let selectionStart = null;
+    let selectionRect = null;
+    let isDraggingGroup = false;
+    let dragGroupStart = null;
+    let originalPositions = {};
+
+    // Variables for right-click panning.
+    let isPanning = false;
+    let panStart = null;
 
     // Load tree and history from localStorage.
     if(localStorage.getItem("familyTree")){
@@ -217,10 +204,9 @@
 
     /* ========= History Management (Undo/Redo) ========= */
     function saveHistory() {
-      // Save a deep clone of familyTree.
       undoStack.push(JSON.stringify(familyTree));
       if(undoStack.length > 100) undoStack.shift();
-      redoStack = []; // clear redo on new change
+      redoStack = [];
       localStorage.setItem("familyTree", JSON.stringify(familyTree));
       localStorage.setItem("undoStack", JSON.stringify(undoStack));
       localStorage.setItem("redoStack", JSON.stringify(redoStack));
@@ -325,10 +311,8 @@
         n.children = n.children.filter(cid => cid !== node.id);
       }
       delete familyTree.nodes[node.id];
-      if(selectedNode && selectedNode.id === node.id) {
-        selectedNode = null;
-        hideSidebar();
-      }
+      selectedNodes.delete(node.id);
+      hideSidebar();
       saveHistory();
     }
     function getNodeAt(worldX, worldY) {
@@ -386,7 +370,7 @@
         let screenPos = worldToScreen(node.x, node.y);
         ctx.beginPath();
         ctx.rect(screenPos.x, screenPos.y, nodeWidth*scale, nodeHeight*scale);
-        ctx.fillStyle = (selectedNode && selectedNode.id === node.id) ? '#ffffcc' : 'white';
+        ctx.fillStyle = (selectedNodes.has(node.id)) ? '#ffffcc' : 'white';
         ctx.fill();
         ctx.strokeStyle = 'black';
         ctx.stroke();
@@ -400,11 +384,38 @@
         ctx.fillText(node.phone, textX, textY + 28*scale);
         ctx.fillText(node.birthday, textX, textY + 42*scale);
       }
+      // Draw selection rectangle if active.
+      if(isSelecting && selectionRect) {
+        ctx.save();
+        ctx.strokeStyle = 'blue';
+        ctx.setLineDash([5, 3]);
+        let rectX = selectionStart.x;
+        let rectY = selectionStart.y;
+        let rectW = selectionRect.w;
+        let rectH = selectionRect.h;
+        let screenStart = worldToScreen(rectX, rectY);
+        let screenEnd = worldToScreen(rectX + rectW, rectY + rectH);
+        ctx.strokeRect(screenStart.x, screenStart.y, screenEnd.x - screenStart.x, screenEnd.y - screenStart.y);
+        ctx.restore();
+      }
+    }
+    // Utility functions to convert between world and screen coordinates.
+    function worldToScreen(x, y) {
+      return {
+        x: (x - offsetX) * scale,
+        y: (y - offsetY) * scale
+      };
+    }
+    function screenToWorld(x, y) {
+      return {
+        x: x / scale + offsetX,
+        y: y / scale + offsetY
+      };
     }
 
     /* ========= Organization ========= */
     function organizeTree() {
-      // 1. Build union-find for partner relationships.
+      // Organizes the entire tree (using the union-find layout algorithm).
       let uf = {};
       function find(x) {
         if(uf[x] === undefined) { uf[x] = x; }
@@ -421,14 +432,12 @@
           node.partners.forEach(pid => union(node.id, pid));
         }
       }
-      // Build union groups.
       let groups = {};
       for (const id in familyTree.nodes) {
         let groupId = find(familyTree.nodes[id].id);
         if(!groups[groupId]) groups[groupId] = [];
         groups[groupId].push(familyTree.nodes[id].id);
       }
-      // 2. Build a map of nodeId to its parents.
       let parentsMap = {};
       for (const id in familyTree.nodes) {
         let node = familyTree.nodes[id];
@@ -437,7 +446,6 @@
           parentsMap[childId].push(node.id);
         });
       }
-      // 3. For each union group, compute a generation level.
       let groupLevel = {};
       for (const gid in groups) {
         groupLevel[gid] = 0;
@@ -461,20 +469,17 @@
           }
         }
       }
-      // 4. Assign each node a generation level based on its union group.
       let generation = {};
       for (const id in familyTree.nodes) {
         let gid = find(familyTree.nodes[id].id);
         generation[id] = groupLevel[gid];
       }
-      // 5. Group nodes by generation.
       let levels = {};
       for (const id in familyTree.nodes) {
         let lvl = generation[id];
         if(!levels[lvl]) levels[lvl] = [];
         levels[lvl].push(familyTree.nodes[id]);
       }
-      // 6. Layout each generation horizontally.
       const verticalSpacing = nodeHeight + 50;
       const horizontalSpacing = nodeWidth + 50;
       for (let lvl in levels) {
@@ -490,9 +495,29 @@
       saveHistory();
       draw();
     }
+    // Organize only the selected nodes (when more than one is selected).
+    function groupOrganizeSelected() {
+      let nodes = Array.from(selectedNodes).map(id => familyTree.nodes[id]);
+      if(nodes.length === 0) return;
+      let minX = Math.min(...nodes.map(n => n.x));
+      let maxX = Math.max(...nodes.map(n => n.x + nodeWidth));
+      let minY = Math.min(...nodes.map(n => n.y));
+      let maxY = Math.max(...nodes.map(n => n.y + nodeHeight));
+      let centerX = (minX + maxX) / 2;
+      let centerY = (minY + maxY) / 2;
+      let spacing = nodeWidth + 50;
+      nodes.sort((a, b) => a.id - b.id);
+      let totalWidth = nodes.length * spacing - 50;
+      let startX = centerX - totalWidth / 2;
+      nodes.forEach((node, i) => {
+         node.x = startX + i * spacing;
+         node.y = centerY - nodeHeight/2;
+      });
+      saveHistory();
+      draw();
+    }
 
     /* ========= Subtree Import ========= */
-    // Import a subtree (in the same format as our familyTree object)
     function importSubtree(jsonData) {
       try {
         let subtree = JSON.parse(jsonData);
@@ -500,11 +525,9 @@
           alert("Invalid subtree data.");
           return;
         }
-        // Build a mapping from old IDs to new IDs.
         let idMap = {};
         for (const oldId in subtree.nodes) {
           let nodeData = subtree.nodes[oldId];
-          // Optionally, adjust position to avoid collision:
           let [newX, newY] = findNonCollidingPosition(nodeData.x, nodeData.y);
           let newNode = {
             id: nextNodeId++,
@@ -520,7 +543,6 @@
           familyTree.nodes[newNode.id] = newNode;
           idMap[oldId] = newNode.id;
         }
-        // Update partner and children references.
         for (const oldId in subtree.nodes) {
           let nodeData = subtree.nodes[oldId];
           let newId = idMap[oldId];
@@ -561,62 +583,79 @@
 
     function showSidebar(node) {
       if(!node) return;
-      sidebar.style.display = 'block';
-      nodeNameInput.value = node.name;
-      nodeSexSelect.value = node.sex;
-      nodePhoneInput.value = node.phone;
-      nodeBirthdayInput.value = node.birthday;
+      if(selectedNodes.size === 1) {
+        sidebar.style.display = 'block';
+        nodeNameInput.value = node.name;
+        nodeSexSelect.value = node.sex;
+        nodePhoneInput.value = node.phone;
+        nodeBirthdayInput.value = node.birthday;
+      } else {
+        hideSidebar();
+      }
     }
     function hideSidebar() {
       sidebar.style.display = 'none';
     }
     nodeNameInput.addEventListener('input', () => {
-      if(selectedNode) {
-        selectedNode.name = nodeNameInput.value;
+      if(selectedNodes.size === 1) {
+        let id = Array.from(selectedNodes)[0];
+        familyTree.nodes[id].name = nodeNameInput.value;
         draw();
         scheduleSaveHistory();
       }
     });
     nodeSexSelect.addEventListener('change', () => {
-      if(selectedNode) {
-        selectedNode.sex = nodeSexSelect.value;
+      if(selectedNodes.size === 1) {
+        let id = Array.from(selectedNodes)[0];
+        familyTree.nodes[id].sex = nodeSexSelect.value;
         draw();
         scheduleSaveHistory();
       }
     });
     nodePhoneInput.addEventListener('input', () => {
-      if(selectedNode) {
-        selectedNode.phone = nodePhoneInput.value;
+      if(selectedNodes.size === 1) {
+        let id = Array.from(selectedNodes)[0];
+        familyTree.nodes[id].phone = nodePhoneInput.value;
         draw();
         scheduleSaveHistory();
       }
     });
     nodeBirthdayInput.addEventListener('input', () => {
-      if(selectedNode) {
-        selectedNode.birthday = nodeBirthdayInput.value;
+      if(selectedNodes.size === 1) {
+        let id = Array.from(selectedNodes)[0];
+        familyTree.nodes[id].birthday = nodeBirthdayInput.value;
         draw();
         scheduleSaveHistory();
       }
     });
     deleteNodeButton.addEventListener('click', () => {
-      if(selectedNode && confirm("Delete this node?")){
-        deleteNode(selectedNode);
-        draw();
+      if(selectedNodes.size === 1) {
+        let id = Array.from(selectedNodes)[0];
+        let node = familyTree.nodes[id];
+        if(node && confirm("Delete this node?")){
+          deleteNode(node);
+          draw();
+        }
       }
     });
     addPartnerButton.addEventListener('click', () => {
-      if(selectedNode){
-        const newX = selectedNode.x + nodeWidth + margin;
-        const newY = selectedNode.y;
+      if(selectedNodes.size === 1) {
+        let id = Array.from(selectedNodes)[0];
+        let node = familyTree.nodes[id];
+        const newX = node.x + nodeWidth + margin;
+        const newY = node.y;
         let newNode = addNode(newX, newY);
-        selectedNode.partners.push(newNode.id);
-        newNode.partners.push(selectedNode.id);
+        node.partners.push(newNode.id);
+        newNode.partners.push(node.id);
         draw();
+        scheduleSaveHistory();
       }
     });
     linkExistingPartnerButton.addEventListener('click', () => {
-      if(selectedNode){
-        const excludeIds = [selectedNode.id, ...selectedNode.partners];
+      if(selectedNodes.size === 1) {
+        let id = Array.from(selectedNodes)[0];
+        let node = familyTree.nodes[id];
+        const excludeIds = [node.id, ...node.partners];
         const options = Object.values(familyTree.nodes).filter(n => !excludeIds.includes(n.id));
         if(options.length === 0){
           alert("No available nodes to link as partner.");
@@ -628,8 +667,8 @@
         if(choice){
           let chosen = options.find(n => n.id == choice);
           if(chosen){
-            selectedNode.partners.push(chosen.id);
-            chosen.partners.push(selectedNode.id);
+            node.partners.push(chosen.id);
+            chosen.partners.push(node.id);
             draw();
             saveHistory();
           }
@@ -637,23 +676,28 @@
       }
     });
     addChildButton.addEventListener('click', () => {
-      if(selectedNode){
-        const newX = selectedNode.x;
-        const newY = selectedNode.y + nodeHeight + margin*5;
+      if(selectedNodes.size === 1) {
+        let id = Array.from(selectedNodes)[0];
+        let node = familyTree.nodes[id];
+        const newX = node.x;
+        const newY = node.y + nodeHeight + margin*5;
         let newNode = addNode(newX, newY);
-        selectedNode.children.push(newNode.id);
-        selectedNode.partners.forEach(pid => {
+        node.children.push(newNode.id);
+        node.partners.forEach(pid => {
           let partner = familyTree.nodes[pid];
           if(partner && !partner.children.includes(newNode.id)){
             partner.children.push(newNode.id);
           }
         });
         draw();
+        scheduleSaveHistory();
       }
     });
     linkExistingChildButton.addEventListener('click', () => {
-      if(selectedNode){
-        const excludeIds = [selectedNode.id, ...selectedNode.children];
+      if(selectedNodes.size === 1) {
+        let id = Array.from(selectedNodes)[0];
+        let node = familyTree.nodes[id];
+        const excludeIds = [node.id, ...node.children];
         const options = Object.values(familyTree.nodes).filter(n => !excludeIds.includes(n.id));
         if(options.length === 0){
           alert("No available nodes to link as child.");
@@ -665,8 +709,8 @@
         if(choice){
           let chosen = options.find(n => n.id == choice);
           if(chosen){
-            selectedNode.children.push(chosen.id);
-            selectedNode.partners.forEach(pid => {
+            node.children.push(chosen.id);
+            node.partners.forEach(pid => {
               let partner = familyTree.nodes[pid];
               if(partner && !partner.children.includes(chosen.id)){
                 partner.children.push(chosen.id);
@@ -700,7 +744,7 @@
       if(confirm("Start a new tree? Current tree will be lost.")){
         familyTree = { nodes: {} };
         nextNodeId = 1;
-        selectedNode = null;
+        selectedNodes.clear();
         hideSidebar();
         saveHistory();
         draw();
@@ -709,7 +753,6 @@
     saveTreeButton.addEventListener('click', () => {
       treeDataTextarea.value = JSON.stringify(familyTree, null, 2);
       saveLoadArea.style.display = 'block';
-      // Set the loadTreeDataButton handler to simply hide the area (for saving)
       loadTreeDataButton.onclick = () => {
         saveLoadArea.style.display = 'none';
       };
@@ -717,7 +760,6 @@
     loadTreeButton.addEventListener('click', () => {
       treeDataTextarea.value = "";
       saveLoadArea.style.display = 'block';
-      // Assign the "load full tree" handler.
       loadTreeDataButton.onclick = () => {
         try {
           let loadedTree = JSON.parse(treeDataTextarea.value);
@@ -728,7 +770,7 @@
               let nid = parseInt(id, 10);
               if(nid >= nextNodeId) nextNodeId = nid + 1;
             }
-            selectedNode = null;
+            selectedNodes.clear();
             hideSidebar();
             saveLoadArea.style.display = 'none';
             saveHistory();
@@ -744,28 +786,30 @@
     cancelLoadButton.addEventListener('click', () => {
       saveLoadArea.style.display = 'none';
     });
-    // "Add Node" button adds a node at the current cursor (or center)
     addNodeButton.addEventListener('click', () => {
       let pos;
       if(lastMousePos) pos = screenToWorld(lastMousePos.x, lastMousePos.y);
       else pos = { x: offsetX + canvasWidth/(2*scale), y: offsetY + canvasHeight/(2*scale) };
       let newNode = addNode(pos.x, pos.y);
-      selectedNode = newNode;
+      selectedNodes.clear();
+      selectedNodes.add(newNode.id);
       showSidebar(newNode);
       draw();
     });
-    // "Import Subtree" opens the text area with instructions.
     importSubtreeButton.addEventListener('click', () => {
       treeDataTextarea.value = "Paste subtree JSON here (must include a 'nodes' object):";
       saveLoadArea.style.display = 'block';
-      // Assign the "import subtree" handler.
       loadTreeDataButton.onclick = () => {
         importSubtree(treeDataTextarea.value);
         saveLoadArea.style.display = 'none';
       };
     });
     organizeTreeButton.addEventListener('click', () => {
-      organizeTree();
+      if(selectedNodes.size > 1) {
+        groupOrganizeSelected();
+      } else {
+        organizeTree();
+      }
     });
     undoBtn.addEventListener('click', () => { undo(); });
     redoBtn.addEventListener('click', () => { redo(); });
@@ -777,51 +821,113 @@
     });
 
     /* ========= Mouse Event Handlers ========= */
-    let isPanning = false;
-    let isDraggingNode = false;
-    let panStart = { x: 0, y: 0 };
-    let dragStart = { x: 0, y: 0 };
-    let originalNodePos = { x: 0, y: 0 };
-    let selectedNode = null;
     canvas.addEventListener('mousedown', e => {
-      if(e.button !== 0) return; // only left button
-      const pos = { x: e.offsetX, y: e.offsetY };
-      const worldPos = screenToWorld(pos.x, pos.y);
-      const node = getNodeAt(worldPos.x, worldPos.y);
-      if(node){
-        selectedNode = node;
-        showSidebar(node);
-        isDraggingNode = true;
-        dragStart = worldPos;
-        originalNodePos = { x: node.x, y: node.y };
-      } else {
+      if(e.button === 2) { // Right click for panning.
         isPanning = true;
         panStart = { x: e.offsetX, y: e.offsetY };
+        return;
+      }
+      if(e.button === 0) { // Left click.
+        const pos = { x: e.offsetX, y: e.offsetY };
+        const worldPos = screenToWorld(pos.x, pos.y);
+        const node = getNodeAt(worldPos.x, worldPos.y);
+        if(node) {
+          if(!selectedNodes.has(node.id)) {
+            selectedNodes.clear();
+            selectedNodes.add(node.id);
+          }
+          isDraggingGroup = true;
+          dragGroupStart = worldPos;
+          originalPositions = {};
+          selectedNodes.forEach(id => {
+            originalPositions[id] = { x: familyTree.nodes[id].x, y: familyTree.nodes[id].y };
+          });
+        } else {
+          isSelecting = true;
+          selectionStart = worldPos;
+          selectionRect = { x: worldPos.x, y: worldPos.y, w: 0, h: 0 };
+        }
+      }
+    });
+    canvas.addEventListener('mousemove', e => {
+      lastMousePos = { x: e.offsetX, y: e.offsetY };
+      if(isPanning) {
+        const dx = e.offsetX - panStart.x;
+        const dy = e.offsetY - panStart.y;
+        offsetX -= dx / scale;
+        offsetY -= dy / scale;
+        panStart = { x: e.offsetX, y: e.offsetY };
+        draw();
+      } else if(isDraggingGroup) {
+        const worldPos = screenToWorld(e.offsetX, e.offsetY);
+        const dx = worldPos.x - dragGroupStart.x;
+        const dy = worldPos.y - dragGroupStart.y;
+        selectedNodes.forEach(id => {
+          familyTree.nodes[id].x = originalPositions[id].x + dx;
+          familyTree.nodes[id].y = originalPositions[id].y + dy;
+        });
+        draw();
+      } else if(isSelecting) {
+        const worldPos = screenToWorld(e.offsetX, e.offsetY);
+        selectionRect.w = worldPos.x - selectionStart.x;
+        selectionRect.h = worldPos.y - selectionStart.y;
+        draw();
       }
     });
     canvas.addEventListener('mouseup', e => {
-      if(isDraggingNode && selectedNode){
-        if(selectedNode.x !== originalNodePos.x || selectedNode.y !== originalNodePos.y){
-          resolveCollisionForNode(selectedNode);
+      if(e.button === 2) {
+        isPanning = false;
+        draw();
+      } else if(e.button === 0) {
+        if(isDraggingGroup) {
+          isDraggingGroup = false;
+          selectedNodes.forEach(id => {
+            resolveCollisionForNode(familyTree.nodes[id]);
+          });
           saveHistory();
+        } else if(isSelecting) {
+          isSelecting = false;
+          if(Math.abs(selectionRect.w) < 0.1 && Math.abs(selectionRect.h) < 0.1) {
+            selectedNodes.clear();
+            hideSidebar();
+          } else {
+            let x1 = Math.min(selectionStart.x, selectionStart.x + selectionRect.w);
+            let y1 = Math.min(selectionStart.y, selectionStart.y + selectionRect.h);
+            let x2 = Math.max(selectionStart.x, selectionStart.x + selectionRect.w);
+            let y2 = Math.max(selectionStart.y, selectionStart.y + selectionRect.h);
+            selectedNodes.clear();
+            for (const id in familyTree.nodes) {
+              let node = familyTree.nodes[id];
+              let centerX = node.x + nodeWidth/2;
+              let centerY = node.y + nodeHeight/2;
+              if(centerX >= x1 && centerX <= x2 && centerY >= y1 && centerY <= y2) {
+                selectedNodes.add(node.id);
+              }
+            }
+            if(selectedNodes.size === 1) {
+              let id = Array.from(selectedNodes)[0];
+              showSidebar(familyTree.nodes[id]);
+            } else {
+              hideSidebar();
+            }
+          }
+          draw();
         }
       }
-      isPanning = false;
-      isDraggingNode = false;
-      draw();
     });
     canvas.addEventListener('mouseleave', e => {
       isPanning = false;
-      isDraggingNode = false;
+      isDraggingGroup = false;
+      isSelecting = false;
     });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-    // Zoom with mouse wheel
+    // Zoom with mouse wheel.
     canvas.addEventListener('wheel', e => {
       e.preventDefault();
       const mousePos = { x: e.offsetX, y: e.offsetY };
       const wheelDelta = e.deltaY;
-      const zoomFactor = 1.05;
+      const zoomFactor = 1.1;
       const worldPosBefore = screenToWorld(mousePos.x, mousePos.y);
       if (wheelDelta < 0) {
         scale *= zoomFactor;
@@ -885,11 +991,13 @@
           const worldPos = screenToWorld(touchStartPos.x, touchStartPos.y);
           const node = getNodeAt(worldPos.x, worldPos.y);
           if(node){
-            selectedNode = node;
+            selectedNodes.clear();
+            selectedNodes.add(node.id);
             showSidebar(node);
           } else {
             let newNode = addNode(worldPos.x, worldPos.y);
-            selectedNode = newNode;
+            selectedNodes.clear();
+            selectedNodes.add(newNode.id);
             showSidebar(newNode);
           }
           draw();
